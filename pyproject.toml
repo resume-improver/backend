@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "resume-helper"
+version = "0.1.0"
+description = ""
+authors = ["Evgeny Bobkunov <jony.zh@yandex.ru>"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.14"
+uvicorn = "^0.35.0"
+python-dotenv = "^1.1.1"
+pydantic = "^2.11.7"
+yandex-cloud-ml-sdk = "^0.12.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
