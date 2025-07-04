@@ -1,81 +1,63 @@
-# Backend
+# Resume Backend
 
-This is a FastAPI backend for resume analysis and cover letter generation using YandexGPT.
+## Описание
 
-## Features
-- Generates a cover letter draft based on your resume and a job description
-- Analyzes your resume for improvements tailored to a specific vacancy
+Сервис для загрузки PDF-файлов резюме и вакансии, хранения их в S3, постановки задач на анализ и хранения результатов в базе данных PostgreSQL. Фоновый обработчик автоматически анализирует задачи.
 
-## Requirements
-- Python 3.8+
-- [Poetry](https://python-poetry.org/docs/#installation)
-- YandexGPT API credentials
+---
 
-## Setup
+## Быстрый старт
 
-1. **Clone the repository**
-   ```bash
-   git clone git@github.com:resume-improver/backend.git
-   cd backend
-   ```
-
-2. **Install Poetry** (if not already installed)
-   ```bash
-   curl -sSL https://install.python-poetry.org | python3 -
-   # or
-   sudo apt install python3-poetry
-   ```
-   You may need to restart your terminal or add Poetry to your PATH:
-   ```bash
-   export PATH="$HOME/.local/bin:$PATH"
-   ```
-
-3. **Install dependencies**
-   ```bash
-   poetry install
-   # or
-   poetry install --no-root
-   ```
-
-4. **Configure environment variables**
-   - Create a `.env` file in the project root with your Yandex Cloud credentials:
-     ```
-     YANDEX_FOLDER_ID=your_yandex_folder_id
-     YANDEX_API_KEY=your_yandex_api_key
-     ```
-
-## Running the Server
-
-To run the FastAPI server on all network interfaces (so it's accessible from other machines):
-
+### 1. Клонируйте репозиторий и перейдите в папку
 ```bash
-poetry run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+cd backend
 ```
 
-- The API will be available at `http://<server-ip>:8000`.
-- `--reload` is for development (auto-reloads on code changes). Remove it for production.
-
-## API Endpoint
-
-### `POST /analyze`
-Analyze a resume and generate a cover letter draft.
-
-**Request JSON:**
-```
-{
-  "resume_text": "...",
-  "vacancy_text": "..."
-}
+### 2. Установите зависимости
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip3 install -r requirements.txt
 ```
 
-**Response JSON:**
+### 3. Настройте переменные окружения
+Создайте файл `.env` в корне проекта и заполните:
 ```
-{
-  "resume_improvements": { ... },
-  "cover_letter_draft": "..."
-}
+# Яндекс Облако S3
+YANDEX_S3_ENDPOINT=https://storage.yandexcloud.net
+YANDEX_S3_ACCESS_KEY=your-access-key
+YANDEX_S3_SECRET_KEY=your-secret-key
+YANDEX_S3_BUCKET=your-bucket-name
+
+# Яндекс GPT
+YANDEX_FOLDER_ID=your-folder-id
+YANDEX_API_KEY=your-yandex-api-key
+
+# PostgreSQL
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_DB=resume_db
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=yourpassword
 ```
 
-## Notes
-- Do **not** commit your `.env` file to version control.
-- For production, review and restrict CORS origins in `main.py`.
+### 4. Запустите PostgreSQL (локально через Docker)
+```bash
+docker run --name resume-pg -e POSTGRES_PASSWORD=yourpassword -e POSTGRES_DB=resume_db -p 5432:5432 -d postgres:15
+```
+
+### 5. Запустите сервис
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Сервис будет доступен по адресу: http://localhost:8000
+
+---
+
+## Основные эндпоинты
+
+- `POST /upload_pdf` — загрузка PDF-файлов резюме и вакансии, постановка задачи
+- `POST /analyze` — анализ резюме и вакансии (по тексту)
+
+---
