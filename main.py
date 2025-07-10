@@ -15,6 +15,10 @@ from datetime import datetime
 import enum
 from apscheduler.schedulers.background import BackgroundScheduler
 import time
+import io
+import fitz
+import requests
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
@@ -120,32 +124,26 @@ def generate_cover_letter(resume: str, vacancy: str) -> str:
     return response
 
 def improve_resume(resume: str, vacancy: str) -> dict:
-    prompt = (
-        "Ты карьерный консультант. Проанализируй следующее резюме на соответствие вакансии. "
-        "Верни результат в формате JSON со следующей структурой:\n\n"
-        "{\n"
-        "  \"missing_skills\": [\"...\"],\n"
-        "  \"suggested_rewordings\": [\n"
-        "    {\"original\": \"...\", \"suggested\": \"...\"}\n"
-        "  ],\n"
-        "  \"block_order_suggestions\": [\n"
-        "    {\"block\": \"...\", \"action\": \"move_up|add|remove\"}\n"
-        "  ]\n"
-        "}\n\n"
-        "Не добавляй ничего, чего нет в резюме. Не придумывай факты.\n\n"
-        f"Резюме:\n{resume}\n\nВакансия:\n{vacancy}"
-    )
-
     messages = [
-        {"role": "user", "text": prompt}
+        {
+            'role': 'system',
+            'text': (
+                'Ты помощник соискателя. Твоя задача - помочь соискателю составить привлекательное для работодателя профессиональное резюме. '
+                'Составь оценочную характеристику резюме. Укажи на недостатки и предложи изменения. После чего - составь черновой вариант изменения, опираясь на предложенные правки. '
+                'Используй информацию из предложенных резюме и вакансии. '
+                'Не указывай ложную информацию в резюме. '
+                'Не рекомендуй пользователю лгать в резюме.'
+            )
+        },
+        {
+            'role': 'user',
+            'text': f'Резюме:\n{resume}\n\nдля вакансии:\n{vacancy}'
+        }
     ]
     response = get_yandexgpt_response(messages)
     text = extract_text(response)
     cleaned = clean_json_text(text)
-    try:
-        return json.loads(cleaned)
-    except Exception as e:
-        return {"error": "Failed to parse JSON", "raw": cleaned}
+    return {"raw": cleaned}
 
 @app.post("/analyze")
 async def analyze_resume(data: ResumeRequest):
@@ -164,6 +162,75 @@ def get_s3_client():
         aws_secret_access_key=YANDEX_S3_SECRET_KEY,
     )
 
+def pdf_from_s3_to_text_array(s3_client, bucket, key):
+    text_array = []
+    try:
+        pdf_stream = io.BytesIO()
+        s3_client.download_fileobj(bucket, key, pdf_stream)
+        pdf_stream.seek(0)
+        with fitz.open(stream=pdf_stream.read(), filetype="pdf") as doc:
+            for page in doc:
+                text_array.append(page.get_text())
+    except Exception as e:
+        print(f"Ошибка при чтении PDF из S3: {e}")
+    return text_array
+
+def extract_resume_json(resume_text_array):
+    resume_text = "\n".join(resume_text_array)
+    system_prompt = (
+        "Ты помощник, который преобразует текст резюме в структурированный JSON. "
+        "Верни только JSON следующей структуры (если что-то не найдено — оставь пустым) или добавь в отдельный пункт то, чего нет в списке:\n"
+        "{\n"
+        "  \"ФИО\": \"\",\n"
+        "  \"Опыт_работы\": \"\",\n"
+        "  \"Хард_скиллы\": [],\n"
+        "  \"Софт_скиллы\": [],\n"
+        "  \"Контакты\": \"\",\n"
+        "  \"Образование\": \"\",\n"
+        "  \"Проекты\": []\n"
+        "}\n"
+        "Не добавляй объяснений, только JSON!"
+    )
+
+    data = {
+        "modelUri": f"gpt://{YANDEX_FOLDER_ID}/yandexgpt",
+        "completionOptions": {"temperature": 0.3, "maxTokens": 3000},
+        "messages": [
+            {"role": "system", "text": system_prompt},
+            {"role": "user", "text": resume_text}
+        ]
+    }
+
+    headers = {
+        "Authorization": f"Api-Key {YANDEX_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    response = requests.post(
+        "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",
+        headers=headers,
+        json=data
+    )
+
+    try:
+        result = response.json()
+        answer = result["result"]["alternatives"][0]["message"]["text"]
+
+        if answer.strip().startswith("```"):
+            answer = answer.strip().strip("`")
+            first_newline = answer.find("\n")
+            answer = answer[first_newline + 1:]
+            answer = answer.strip()
+
+        parsed_json = json.loads(answer)
+        return parsed_json
+
+    except Exception as e:
+        print("Ошибка при обработке ответа YandexGPT:", e)
+        print("Ответ модели:\n", response.text)
+        return None
+
 @app.post("/upload_pdf")
 async def upload_pdf(
     resume_file: UploadFile = File(...),
@@ -177,26 +244,19 @@ async def upload_pdf(
     s3.upload_fileobj(resume_file.file, YANDEX_S3_BUCKET, resume_key)
     s3.upload_fileobj(vacancy_file.file, YANDEX_S3_BUCKET, vacancy_key)
 
-    resume_url = f"{YANDEX_S3_ENDPOINT}/{YANDEX_S3_BUCKET}/{resume_key}"
-    vacancy_url = f"{YANDEX_S3_ENDPOINT}/{YANDEX_S3_BUCKET}/{vacancy_key}"
+    # Чтение PDF напрямую из S3
+    resume_text_arr = pdf_from_s3_to_text_array(s3, YANDEX_S3_BUCKET, resume_key)
+    vacancy_text_arr = pdf_from_s3_to_text_array(s3, YANDEX_S3_BUCKET, vacancy_key)
 
-    # Сохраняем задачу в базу данных
-    db = SessionLocal()
-    task = ResumeTask(
-        resume_url=resume_url,
-        vacancy_url=vacancy_url,
-        status=TaskStatus.pending
-    )
-    db.add(task)
-    db.commit()
-    db.refresh(task)
-    db.close()
+    resume_text = "\n".join(resume_text_arr)
+    vacancy_text = "\n".join(vacancy_text_arr)
+
+    letter = generate_cover_letter(resume_text, vacancy_text)
+    improvements = improve_resume(resume_text, vacancy_text)
 
     return {
-        "task_id": task.id,
-        "resume_url": resume_url,
-        "vacancy_url": vacancy_url,
-        "status": task.status
+        "resume_improvements": improvements,
+        "cover_letter_draft": extract_text(letter)
     }
 
 # --- Фоновый обработчик ---

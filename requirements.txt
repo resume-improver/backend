@@ -8,3 +8,4 @@ apscheduler
 pydantic
 yandex_cloud_ml_sdk
 python-multipart 
+pymupdf
